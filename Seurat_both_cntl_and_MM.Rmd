@@ -41,7 +41,7 @@ combined2[["percent.mt"]] <- PercentageFeatureSet(combined2, pattern = "^MT-")
 VlnPlot(combined2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) # visualize QC matrix 
 plot1 <- FeatureScatter(combined2, feature1 = "nCount_RNA", feature2 = "percent.mt")
 plot2 <- FeatureScatter(combined2, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-CombinePlots(plots = list(plot1, plot2))
+#CombinePlots(plots = list(plot1, plot2))
 ```
 
 ## 4. Data filtering
