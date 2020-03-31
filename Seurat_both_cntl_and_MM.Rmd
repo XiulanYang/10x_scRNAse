@@ -1,0 +1,178 @@
+---
+title: "both_seq_runs_combined2_group"
+author: "Xiulan Yang"
+date: "3/10/2020"
+output: html_document
+---
+```{r, warning=FALSE}
+# 0.1. Load required packages for today
+library(RColorBrewer)   # 1. library to access easily multiple colors for plotting
+library(Rtsne)          # 2. R implementation of the t-SNE algorithm
+library(tictoc)         # 3. library to profile execution time
+library(Seurat)         # 4. library to single-cell analysis
+library(magrittr)       # 5. library for introducing pipe syntax: https://cran.r-project.org/web/packages/magrittr/vignettes/magrittr.html
+library(dplyr)          # 6. useful to manipulate data frames
+```
+
+## 2. Load expression data and initialize a Seurat object 
+
+```{r}
+#cntl.data <- Read10X(data.dir = "/Users/xiulanyang/Dropbox/bioinformatics/Ale_10x_scRNAseq/both_seq_runs/CTR/outs/filtered_feature_bc_matrix/")
+#cntl <- CreateSeuratObject(counts = cntl.data, project = "cntl", min.cells = 3, min.features = 1500)
+#dim(cntl)
+#mm.data <- Read10X(data.dir = "/Users/xiulanyang/Dropbox/bioinformatics/Ale_10x_scRNAseq/both_seq_runs/combined2/outs/filtered_feature_bc_matrix/")
+#mm <- CreateSeuratObject(counts = mm.data, project = "combined2", min.cells = 3, min.features = 1500)
+#dim(mm)
+#combined <- merge(cntl, y = mm, add.cell.ids = c("cntl", "combined2"), project = "maturation" )
+#dim(combined)
+
+combined2.data <- Read10X(data.dir = "/Users/xiulanyang/Dropbox/bioinformatics/Ale_10x_scRNAseq/both_seq_runs/combined/outs/filtered_feature_bc_matrix/")
+combined2 <- CreateSeuratObject(counts = combined2.data, project = "combined2", min.cells = 3, min.features = 1500)
+dim(combined2)
+```
+
+## 3. calculate mitochondria read percentage and do QC plot
+
+
+`FeatureScatter` is typically used to visualize feature-feature relationships, but can be used for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+```{r, normalization}
+dim(combined2)
+combined2[["percent.mt"]] <- PercentageFeatureSet(combined2, pattern = "^MT-")
+VlnPlot(combined2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) # visualize QC matrix 
+plot1 <- FeatureScatter(combined2, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(combined2, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2))
+```
+
+## 4. Data filtering
+
+```{r}
+combined2 <- subset(combined2, subset = nCount_RNA > 1000  & nCount_RNA < 40000 & percent.mt < 35)
+dim(combined2)
+```
+
+## 5. Now let's have a look at the data
+
+```{r pressure, echo=FALSE}
+VlnPlot(combined2, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+dim(combined2@assays$RNA)
+```
+
+## 6. Let's get to know the Seurat object a bit and get some statistical numbers;
+We can get the mean and standard deviation distribution of the UMI and genes detected per cell;
+```{r}
+slotNames(combined2)
+head(combined2@meta.data)
+tail(combined2@meta.data)
+summary(combined2@meta.data$nCount_RNA)
+sd(combined2@meta.data$nCount_RNA)
+summary(combined2@meta.data$nFeature_RNA)
+sd(combined2@meta.data$nFeature_RNA)
+```
+
+
+## 7. save the Seurat object as .RData
+```{r}
+combined2
+save(combined2, file = "/Users/xiulanyang/Dropbox/bioinformatics/Ale_10x_scRNAseq/both_seq_runs/combined/combined2_filtered.RData")
+```
+
+## 8. Data normalization: global-scaling normalization method “LogNormalize” that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result.
+do not need to do the small sample correction here because of the filtering criteria used; 
+```{r}
+combined2 <- NormalizeData(combined2, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+## 9. Identification of highly variable features (feature selection)
+to find the genes that exhibit high cell-to-cell variation (i.e. highly expressed in some cells and lowly expressed in others), the downstream analysis (PCA, UMAP, marker-finding) will only use these genes;
+
+--- get the 3500 most variable genes;
+
+```{r}
+combined2 <- FindVariableFeatures(combined2, selection.method = "vst", nfeatures = 3500)
+top10 <- head(VariableFeatures(combined2), 10)
+plot1 <- VariableFeaturePlot(combined2)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+CombinePlots(plots = list(plot1, plot2))
+top10
+```
+
+## 10. scale the data
+a linear transformation ('scaling') that is a standard pre-processing step prior to dimensional reduction techniques like PCA.
+the function ScaleData does:
+a) shifts the expression of each gene, so that the mean expression across cells is 0;
+b) scale the expression of each gene, so that the variance across the cells is 1 (this step give equal weight in downstream analysis, so that highly-expressed genes do not dominate)
+the results are stored in combined2[["RNA"]]@scale.data
+
+```{r}
+all.genes <- rownames(combined2)
+combined2 <- ScaleData(combined2, features = all.genes)
+```
+
+## 11. perform linear dimensional reduction
+
+```{r}
+combined2 <- RunPCA(combined2, features = VariableFeatures(object = combined2))
+print(combined2[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(combined2, dims = 1:2, reduction = "pca")
+DimPlot(combined2, reduction = "pca")
+DimHeatmap(combined2, dims = 1:6, cells = 500, balanced = TRUE)
+```
+
+## 12. Determine the 'dimensionality' of the dataset
+elbow plot
+
+```{r}
+ElbowPlot(combined2)
+```
+
+## 13. Cluster the cells
+principles to be read and understood
+
+```{r}
+combined2 <- FindNeighbors(combined2, dims = 1:10)
+combined2 <- FindClusters(combined2, resolution = 0.5)
+head(Idents(combined2), 5) # Look at the cluster IDs of the first 5 cells
+```
+
+## 14. Run non-linear dimensional reduction (UMAP/tSNE)
+
+```{r}
+combined2 <- RunUMAP(combined2, dims = 1:10)
+DimPlot(combined2, reduction = "umap", label = TRUE)
+DimPlot(combined2, reduction = "umap", group.by = "orig.ident")
+```
+
+save the object at this point
+
+```{r}
+saveRDS(combined2, file = "/Users/xiulanyang/Dropbox/bioinformatics/Ale_10x_scRNAseq/both_seq_runs/combined/combined2_UMAP_step.rds")
+```
+
+## 15. Finding differentially expressed features (cluster markers)
+
+what is the y axis? 
+
+```{r}
+FeaturePlot(combined2, features = c("TNNI1","TNNI3", "MYH6", "MYH7", "GJA1", "SCN5A", "KCNJ2", "HCN4", "ATP2A2"))
+```
+
+```{r}
+FeaturePlot(combined2, features = c("MYL2", "MYL7", "DES", "VIM", "RBM20", "CCNB1", "CDKN1A", "CACNA1G", "CACNA1C"))
+```
+
+```{r}
+FeaturePlot(combined2, features = c("ELK3", "HOPX", "FHL3", "HEY2", "SMYD1", "SMARCD1", "ANKRD1", "CACNA1D"))
+```
+
+## 16. Find cluster markers. 
+```{r}
+cluster0.markers <- FindMarkers(combined2, ident.1 = 0)
+head(cluster0.markers, n = 5)
+```
+
+```{r}
+write.csv(cluster0.markers, "/Users/xiulanyang/Dropbox/bioinformatics/Ale_10x_scRNAseq/both_seq_runs/combined/cluster0_the_most_mature_markers_both_groups.csv")
+```
+
+
